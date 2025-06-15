@@ -9,45 +9,65 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 func RequireAuth(c *gin.Context) {
-	//get the cookie off req
-	tokenString, err := c.Cookie("Authorization")
-	if err != nil {
-		c.AbortWithStatus(http.StatusUnauthorized)
+	// Get token from cookie
+	tokenString := c.GetHeader("Authorization")
+	if tokenString == "" {
+		var err error
+		tokenString, err = c.Cookie("Authorization")
+		if err != nil {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
 	}
-	// decode/validate it
+
+	// Parse token
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		// hmacSampleSecret is a []byte containing your secret, e.g. []byte("my_secret_key")
 		return []byte(os.Getenv("SECRET")), nil
 	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 	if err != nil {
 		c.AbortWithStatus(http.StatusUnauthorized)
+		return
 	}
 
 	if claims, ok := token.Claims.(jwt.MapClaims); ok {
-		//check the exp
+		// Check expiration
 		if float64(time.Now().Unix()) > claims["exp"].(float64) {
 			c.AbortWithStatus(http.StatusUnauthorized)
+			return
 		}
-		//find the user with token sub
-		var user models.User
-		initializers.DB.First(&user, claims["sub"])
 
+		// Get user ID (subject) from claims
+		userIDStr, ok := claims["sub"].(string)
+		if !ok {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+
+		// Convert to UUID
+		userID, err := uuid.Parse(userIDStr)
+		if err != nil {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+
+		// Find user
+		var user models.User
+		initializers.DB.First(&user, "id = ?", userID)
 		if user.ID == 0 {
 			c.AbortWithStatus(http.StatusUnauthorized)
+			return
 		}
 
-		//attach to req
+		// Attach user and userID to context
 		c.Set("user", user)
-
-		//continue
+		c.Set("userID", user.ID)
 
 		c.Next()
-
 	} else {
 		c.AbortWithStatus(http.StatusUnauthorized)
 	}
-
 }
